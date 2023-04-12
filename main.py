@@ -1,40 +1,66 @@
 import os
 import subprocess
 import telegram
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler
+from telegram.ext import MessageHandler, Filters
+from telegram.ext.dispatcher import run_async
 
-# Replace with your actual bot token
-TOKEN = 'YOUR_BOT_TOKEN_HERE'
+# Define the Telegram bot API token
+TOKEN = "your_bot_token_here"
+bot = telegram.Bot(token=TOKEN)
 
-# Define the command handlers
+# Define a command handler for the '/start' command
 def start(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Hello! Send me an SRT file and an MP4 file to merge them as hard subs.")
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Hi! Send me a video file (.mp4) and an SRT file (.srt) to merge them as hard subs at the bottom of the video.")
 
-def help(update, context):
-    context.bot.send_message(chat_id=update.effective_chat.id, text="Send me an SRT file and an MP4 file to merge them as hard subs.")
-
-def process_video(update, context):
+# Define a function to handle the video and SRT files sent by the user
+@run_async
+def handle_files(update, context):
+    # Get the user ID and chat ID
+    user_id = update.message.from_user.id
     chat_id = update.message.chat_id
-    video_file = context.bot.getFile(update.message.video.file_id)
-    video_file_path = video_file.download()
-    srt_file = context.bot.getFile(update.message.document.file_id)
-    srt_file_path = srt_file.download()
-    output_file_path = os.path.splitext(video_file_path)[0] + '_subbed.mp4'
-    command = f'ffmpeg -i {video_file_path} -vf "subtitles={srt_file_path}:force_style=\'Fontsize=24,PrimaryColour=&Hffffff&\'" -c:a copy {output_file_path}'
-    subprocess.call(command, shell=True)
-    with open(output_file_path, 'rb') as f:
-        context.bot.send_document(chat_id=chat_id, document=f)
-    os.remove(video_file_path)
-    os.remove(srt_file_path)
-    os.remove(output_file_path)
 
-# Create the Updater and attach handlers
-updater = Updater(TOKEN, use_context=True)
-dispatcher = updater.dispatcher
-dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(CommandHandler('help', help))
-dispatcher.add_handler(MessageHandler(Filters.video & Filters.document, process_video))
+    # Check if the message has an SRT file and a video file
+    if len(context.bot_data.get('video', [])) > 0 and len(context.bot_data.get('srt', [])) > 0:
+        # Get the file IDs of the video and SRT files
+        video_file_id = context.bot_data['video'][0].file_id
+        srt_file_id = context.bot_data['srt'][0].file_id
 
-# Start the bot
-updater.start_polling()
-updater.idle()
+        # Download the video and SRT files
+        video_file = bot.get_file(video_file_id)
+        srt_file = bot.get_file(srt_file_id)
+        video_file.download('video.mp4')
+        srt_file.download('subtitles.srt')
+
+        # Use ffmpeg to merge the video and SRT files
+        subprocess.call(['ffmpeg', '-i', 'video.mp4', '-vf', f"subtitles=subtitles.srt:force_style='Alignment=6'", '-c:a', 'copy', 'output.mp4'])
+
+        # Send the merged file to the user
+        with open('output.mp4', 'rb') as f:
+            bot.send_video(chat_id=chat_id, video=f)
+
+        # Clean up the downloaded files
+        os.remove('video.mp4')
+        os.remove('subtitles.srt')
+        os.remove('output.mp4')
+
+        # Reset the bot data
+        context.bot_data['video'] = []
+        context.bot_data['srt'] = []
+        
+        # Let the user know that the merged file has been sent
+        context.bot.send_message(chat_id=chat_id, text="Merged file has been sent!")
+    else:
+        # Let the user know that there was an error
+        context.bot.send_message(chat_id=chat_id, text="Please send both an SRT file and a video file.")
+
+# Define a message handler to handle video files
+def handle_video(update, context):
+    context.bot_data['video'] = update.message.video
+
+# Define a message handler to handle SRT files
+def handle_srt(update, context):
+    context.bot_data['srt'] = update.message.document
+
+# Create an instance of the Updater class and add the handlers
+updater = Updater(token=TOKEN, use_context=True)
